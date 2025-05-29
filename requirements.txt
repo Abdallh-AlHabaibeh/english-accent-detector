@@ -1,6 +1,3 @@
 streamlit
 pytube
-whisper @ git+https://github.com/openai/whisper.git
-torchaudio
-speechbrain
 ffmpeg-python
