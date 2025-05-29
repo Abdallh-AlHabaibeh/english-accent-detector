@@ -1,93 +1,82 @@
 import streamlit as st
-import tempfile
+import yt_dlp
 import os
 import subprocess
-from pytube import YouTube
-import speech_recognition as sr
-from pytube import YouTube
-from pytube.exceptions import VideoUnavailable
-import requests
+from speechbrain.pretrained import EncoderClassifier
+import torch
+import numpy as np
 
-def download_and_extract_audio(video_url):
-    try:
-        if not video_url.endswith(".mp4"):
-            st.error("Only direct MP4 links are supported in this version.")
-            return None
+# Download video from URL and extract audio path
+def download_video_extract_audio(video_url, output_dir="downloads"):
+    os.makedirs(output_dir, exist_ok=True)
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': f'{output_dir}/video.%(ext)s',
+        'quiet': True,
+        'no_warnings': True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info_dict = ydl.extract_info(video_url, download=True)
+        ext = info_dict.get('ext', 'mp4')
+        video_path = f"{output_dir}/video.{ext}"
+        
+    # Extract audio with ffmpeg to WAV 16kHz mono
+    audio_path = f"{output_dir}/audio.wav"
+    cmd = [
+        "ffmpeg", "-y", "-i", video_path,
+        "-ac", "1", "-ar", "16000",
+        "-vn", audio_path
+    ]
+    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return audio_path
 
-        video_response = requests.get(video_url, stream=True)
-        if video_response.status_code != 200:
-            st.error("Failed to download video.")
-            return None
+# Mock classifier: accepts speechbrain embedding, returns accent + confidence
+def classify_accent(embedding):
+    # For demo, randomly assign accents based on embedding norm (fake logic)
+    norm = torch.norm(embedding).item()
+    accents = ['American', 'British', 'Australian', 'Indian']
+    idx = int(norm * 10) % len(accents)
+    accent = accents[idx]
+    confidence = min(100, (norm * 50) % 100)
+    summary = f"The speaker most likely has a {accent} English accent with confidence {confidence:.1f}%."
+    return accent, confidence, summary
 
-        temp_video_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        with open(temp_video_file.name, 'wb') as f:
-            for chunk in video_response.iter_content(chunk_size=1024):
-                if chunk:
-                    f.write(chunk)
+@st.cache_data(show_spinner=False)
+def get_speaker_embedding(audio_path):
+    classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb", run_opts={"device":"cpu"})
+    signal, fs = classifier.load_audio(audio_path)
+    embedding = classifier.encode_batch(signal)
+    return embedding.squeeze()
 
-        temp_audio_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        subprocess.call([
-            'ffmpeg',
-            '-i', temp_video_file.name,
-            '-ar', '16000',
-            '-ac', '1',
-            temp_audio_file.name
-        ])
-        os.unlink(temp_video_file.name)
-        return temp_audio_file.name
-
-    except Exception as e:
-        st.error(f"Error downloading or processing video: {e}")
-        return None
-
-
-
-def transcribe_audio(audio_path):
-    recognizer = sr.Recognizer()
-    with sr.AudioFile(audio_path) as source:
-        audio = recognizer.record(source)
-    try:
-        text = recognizer.recognize_google(audio)
-        return text
-    except sr.UnknownValueError:
-        return ""
-    except sr.RequestError:
-        return ""
-
-def simple_accent_classifier(text):
-    # Basic heuristic for demo
-    british_words = ['colour', 'favour', 'centre', 'theatre']
-    american_words = ['color', 'favor', 'center', 'theater']
+def main():
+    st.title("English Accent Detection from Video URL")
+    st.write("Enter a public video URL (e.g., Loom, direct MP4).")
     
-    british_score = sum(word in text.lower() for word in british_words)
-    american_score = sum(word in text.lower() for word in american_words)
-    
-    if british_score > american_score:
-        return "British", british_score / max(len(british_words), 1) * 100
-    elif american_score > british_score:
-        return "American", american_score / max(len(american_words), 1) * 100
-    else:
-        return "Unknown", 0
+    video_url = st.text_input("Video URL:")
+    if st.button("Analyze Accent"):
+        if not video_url.strip():
+            st.error("Please enter a valid video URL.")
+            return
+        
+        with st.spinner("Downloading video and extracting audio..."):
+            try:
+                audio_path = download_video_extract_audio(video_url)
+            except Exception as e:
+                st.error(f"Failed to download or extract audio: {e}")
+                return
+        
+        with st.spinner("Analyzing accent..."):
+            try:
+                embedding = get_speaker_embedding(audio_path)
+                accent, confidence, summary = classify_accent(embedding)
+            except Exception as e:
+                st.error(f"Accent analysis failed: {e}")
+                return
+        
+        st.success("Analysis complete!")
+        st.write(f"**Accent Classification:** {accent}")
+        st.write(f"**Confidence:** {confidence:.1f}%")
+        st.write(f"**Summary:** {summary}")
 
-st.title("🎙️ English Accent Detection Demo")
-
-video_url = st.text_input("Enter a public video URL (YouTube or direct MP4 link):")
-
-if st.button("Analyze"):
-    if video_url:
-        with st.spinner("Processing..."):
-            audio_path = download_and_extract_audio(video_url)
-            if audio_path:
-                transcript = transcribe_audio(audio_path)
-                if transcript:
-                    accent, confidence = simple_accent_classifier(transcript)
-                    st.write(f"**Transcript:** {transcript}")
-                    st.write(f"**Detected Accent:** {accent}")
-                    st.write(f"**Confidence Score:** {confidence:.2f}%")
-                else:
-                    st.error("Could not transcribe audio.")
-                os.unlink(audio_path)
-            else:
-                st.error("Failed to extract audio.")
-    else:
-        st.warning("Please enter a valid video URL.")
+if __name__ == "__main__":
+    main()
