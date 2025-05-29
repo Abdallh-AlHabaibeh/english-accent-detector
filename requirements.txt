@@ -1,6 +1,2 @@
 streamlit
-torch
-torchaudio
-transformers
 requests
-soundfile
