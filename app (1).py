@@ -6,38 +6,40 @@ from pytube import YouTube
 import speech_recognition as sr
 from pytube import YouTube
 from pytube.exceptions import VideoUnavailable
+import requests
 
 def download_and_extract_audio(video_url):
     try:
-        yt = YouTube(video_url)
-        stream = yt.streams.filter(only_audio=True).first()
-        if stream is None:
-            raise Exception("No audio stream found.")
-        
+        if not video_url.endswith(".mp4"):
+            st.error("Only direct MP4 links are supported in this version.")
+            return None
+
+        video_response = requests.get(video_url, stream=True)
+        if video_response.status_code != 200:
+            st.error("Failed to download video.")
+            return None
+
         temp_video_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        stream.download(filename=temp_video_file.name)
+        with open(temp_video_file.name, 'wb') as f:
+            for chunk in video_response.iter_content(chunk_size=1024):
+                if chunk:
+                    f.write(chunk)
 
         temp_audio_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        result = subprocess.run([
+        subprocess.call([
             'ffmpeg',
-            '-y',
             '-i', temp_video_file.name,
             '-ar', '16000',
             '-ac', '1',
             temp_audio_file.name
-        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
+        ])
         os.unlink(temp_video_file.name)
-
-        if result.returncode != 0:
-            raise Exception("ffmpeg conversion failed.")
-
         return temp_audio_file.name
-    except VideoUnavailable:
-        st.error("Video is unavailable or restricted.")
+
     except Exception as e:
         st.error(f"Error downloading or processing video: {e}")
-    return None
+        return None
+
 
 
 def transcribe_audio(audio_path):
