@@ -2,9 +2,9 @@ import streamlit as st
 import requests
 import time
 
-st.title("English Accent Detection — No FFmpeg Needed")
+st.title("English Accent Detection")
 
-API_KEY = "dfca7b5eef9946f48b4348571c3cd5f8"  
+API_KEY = "e5cc70299daf4eed810ff8e6f7684e32"  
 
 HEADERS = {
     "authorization": API_KEY,
