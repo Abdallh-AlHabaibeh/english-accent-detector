@@ -1,3 +1,5 @@
 streamlit
-pytube
-SpeechRecognition
+pydub
+torch
+torchaudio
+transformers
