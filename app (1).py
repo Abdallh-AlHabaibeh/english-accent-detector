@@ -1,33 +1,32 @@
 import streamlit as st
 import tempfile
 import requests
-from moviepy.editor import VideoFileClip
+import os
+from pydub import AudioSegment
 import torchaudio
 from transformers import Wav2Vec2Processor, Wav2Vec2ForSequenceClassification
 import torch
-import os
 
-st.title("English Accent Detection Tool 🎤")
+st.title("English Accent Detector 🎙️")
 
-video_url = st.text_input("Enter a public video URL (MP4 or Loom):")
+video_url = st.text_input("Enter a public video URL (MP4):")
 
-if video_url and st.button("Analyze Accent"):
-    st.info("Downloading video...")
+if video_url and st.button("Analyze"):
     try:
+        st.info("Downloading video...")
         # Download video
         response = requests.get(video_url, stream=True)
         temp_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
         with open(temp_video.name, 'wb') as f:
             f.write(response.content)
+        st.success("Video downloaded ✅")
 
-        st.success("Video downloaded!")
-
-        # Extract audio
+        # Extract audio using pydub
         st.info("Extracting audio...")
-        video = VideoFileClip(temp_video.name)
         temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        video.audio.write_audiofile(temp_audio.name, codec='pcm_s16le')
-        st.success("Audio extracted!")
+        audio = AudioSegment.from_file(temp_video.name)
+        audio.export(temp_audio.name, format="wav")
+        st.success("Audio extracted ✅")
 
         # Load audio
         waveform, sample_rate = torchaudio.load(temp_audio.name)
@@ -36,33 +35,29 @@ if video_url and st.button("Analyze Accent"):
         if sample_rate != 16000:
             resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)
             waveform = resampler(waveform)
-            sample_rate = 16000
 
-        # Load model
-        st.info("Running accent classification...")
+        # Load accent detection model
+        st.info("Analyzing accent...")
         model_name = "svalabs/wav2vec2-xlsr-english-accent-classifier"
         processor = Wav2Vec2Processor.from_pretrained(model_name)
         model = Wav2Vec2ForSequenceClassification.from_pretrained(model_name)
 
-        inputs = processor(waveform.squeeze(), sampling_rate=sample_rate, return_tensors="pt", padding=True)
+        inputs = processor(waveform.squeeze(), sampling_rate=16000, return_tensors="pt", padding=True)
         with torch.no_grad():
             logits = model(**inputs).logits
         predicted_class = torch.argmax(logits, dim=-1).item()
         confidence = torch.softmax(logits, dim=-1)[0][predicted_class].item() * 100
 
-        # Label mapping
         labels = model.config.id2label
-        accent_label = labels[predicted_class]
+        accent = labels[predicted_class]
 
-        st.success("Analysis complete!")
-        st.subheader("📝 Results")
-        st.write(f"**Detected Accent**: {accent_label}")
-        st.write(f"**Confidence Score**: {confidence:.2f}%")
-        st.write(f"**Summary**: This speaker most likely has a(n) {accent_label} accent based on English speech patterns.")
+        st.success("✅ Analysis complete")
+        st.markdown(f"**Accent**: {accent}")
+        st.markdown(f"**Confidence**: {confidence:.2f}%")
+        st.markdown(f"**Summary**: This speaker is likely using a **{accent}** English accent.")
 
-        # Cleanup
         os.remove(temp_video.name)
         os.remove(temp_audio.name)
 
     except Exception as e:
-        st.error(f"Something went wrong: {e}")
+        st.error(f"⚠️ Error: {e}")
