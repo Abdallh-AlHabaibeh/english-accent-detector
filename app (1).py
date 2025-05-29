@@ -1,46 +1,68 @@
 import streamlit as st
-from pytube import YouTube
 import tempfile
-import subprocess
-import os
-from speechbrain.pretrained import EncoderClassifier
+import requests
+from moviepy.editor import VideoFileClip
 import torchaudio
+from transformers import Wav2Vec2Processor, Wav2Vec2ForSequenceClassification
+import torch
+import os
 
-st.title("🧠 English Accent Detector (Minimal & Real)")
+st.title("English Accent Detection Tool 🎤")
 
-video_url = st.text_input("Enter a YouTube video URL:")
+video_url = st.text_input("Enter a public video URL (MP4 or Loom):")
 
-def download_audio(url):
-    yt = YouTube(url)
-    audio_stream = yt.streams.filter(only_audio=True).first()
-    temp_video = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-    audio_stream.download(filename=temp_video.name)
-    audio_path = temp_video.name.replace(".mp4", ".wav")
-    subprocess.run(["ffmpeg", "-i", temp_video.name, "-ac", "1", "-ar", "16000", audio_path],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return audio_path
+if video_url and st.button("Analyze Accent"):
+    st.info("Downloading video...")
+    try:
+        # Download video
+        response = requests.get(video_url, stream=True)
+        temp_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+        with open(temp_video.name, 'wb') as f:
+            f.write(response.content)
 
-def classify_accent(audio_path):
-    classifier = EncoderClassifier.from_hparams(
-        source="speechbrain/lang-id-commonlanguage_ecapa",
-        savedir="pretrained_models/lang-id"
-    )
-    prediction = classifier.classify_file(audio_path)
-    predicted_accent = prediction[3][0]
-    confidence = float(prediction[1][0]) * 100
-    return predicted_accent, round(confidence, 2)
+        st.success("Video downloaded!")
 
-if st.button("Analyze"):
-    if not video_url:
-        st.warning("Please enter a YouTube video URL.")
-    else:
-        with st.spinner("Processing..."):
-            try:
-                audio_path = download_audio(video_url)
-                accent, confidence = classify_accent(audio_path)
-                st.success("✅ Accent Detected")
-                st.write(f"*Accent:* {accent}")
-                st.write(f"*Confidence:* {confidence}%")
-                os.unlink(audio_path)
-            except Exception as e:
-                st.error(f"❌ Error: {e}")
+        # Extract audio
+        st.info("Extracting audio...")
+        video = VideoFileClip(temp_video.name)
+        temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        video.audio.write_audiofile(temp_audio.name, codec='pcm_s16le')
+        st.success("Audio extracted!")
+
+        # Load audio
+        waveform, sample_rate = torchaudio.load(temp_audio.name)
+
+        # Resample if needed
+        if sample_rate != 16000:
+            resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)
+            waveform = resampler(waveform)
+            sample_rate = 16000
+
+        # Load model
+        st.info("Running accent classification...")
+        model_name = "svalabs/wav2vec2-xlsr-english-accent-classifier"
+        processor = Wav2Vec2Processor.from_pretrained(model_name)
+        model = Wav2Vec2ForSequenceClassification.from_pretrained(model_name)
+
+        inputs = processor(waveform.squeeze(), sampling_rate=sample_rate, return_tensors="pt", padding=True)
+        with torch.no_grad():
+            logits = model(**inputs).logits
+        predicted_class = torch.argmax(logits, dim=-1).item()
+        confidence = torch.softmax(logits, dim=-1)[0][predicted_class].item() * 100
+
+        # Label mapping
+        labels = model.config.id2label
+        accent_label = labels[predicted_class]
+
+        st.success("Analysis complete!")
+        st.subheader("📝 Results")
+        st.write(f"**Detected Accent**: {accent_label}")
+        st.write(f"**Confidence Score**: {confidence:.2f}%")
+        st.write(f"**Summary**: This speaker most likely has a(n) {accent_label} accent based on English speech patterns.")
+
+        # Cleanup
+        os.remove(temp_video.name)
+        os.remove(temp_audio.name)
+
+    except Exception as e:
+        st.error(f"Something went wrong: {e}")
