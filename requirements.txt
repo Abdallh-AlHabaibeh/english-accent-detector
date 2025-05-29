@@ -1,5 +1,5 @@
 streamlit
-pydub
+pydub==0.24.1
 torch
 torchaudio
 transformers
